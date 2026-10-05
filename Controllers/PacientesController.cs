@@ -1,0 +1,116 @@
+using Microsoft.AspNetCore.Mvc;
+using ApiClinica.Models;
+using ApiClinica.Data;
+using Microsoft.EntityFrameworkCore;
+using ApiClinica.DTOs;
+using ApiClinica.Mappers;
+using ApiClinica.Validation;
+
+namespace ApiClinica.Controllers;
+
+[ApiController]
+[Route("api/[controller]")]
+public class PacientesController : ControllerBase
+{
+    private readonly AppDbContext _context;
+
+    public PacientesController(AppDbContext context)
+    {
+        _context = context;
+    }
+
+    // GET: api/pacientes
+    [HttpGet]
+    public async Task<IActionResult> GetPacientes()
+    {
+        var pacientes = await _context.Pacientes.ToListAsync();
+
+        var pacientesDTO = pacientes
+            .Select(p => PacienteMapper.ToDTO(p))
+            .ToList();
+
+        return Ok(pacientesDTO);
+    }
+
+    // GET: api/pacientes/{id}
+    [HttpGet("{id}")]
+    public async Task<IActionResult> GetPacienteById(int id)
+    {
+        var paciente = await _context.Pacientes.FindAsync(id);
+
+        if (paciente == null)
+            return NotFound();
+
+        return Ok(PacienteMapper.ToDTO(paciente));
+    }
+
+    // POST: api/pacientes
+    [HttpPost]
+    public async Task<IActionResult> CreatePacient([FromBody] PacienteCreateDTO dto)
+    {
+        if (dto.DataNasc > DateOnly.FromDateTime(DateTime.Today))
+            return BadRequest(new { mensagem = "Data de nascimento não pode ser futura." });
+
+        if (!Validators.IsValidTelefone(dto.Telefone))
+            return BadRequest(new { mensagem = "Telefone em formato inválido. Use o formato (47) 98888-7777." });
+
+        if (!Validators.IsValidCpf(dto.Cpf))
+            return BadRequest(new { mensagem = "CPF inválido." });
+
+        var cpfJaExiste = await _context.Pacientes.AnyAsync(p => p.Cpf == dto.Cpf);
+        if (cpfJaExiste)
+            return BadRequest(new { mensagem = "Já existe um paciente cadastrado com este CPF." });
+
+        var paciente = PacienteMapper.ToModel(dto);
+
+        _context.Pacientes.Add(paciente);
+        await _context.SaveChangesAsync();
+
+        var pacienteDTO = PacienteMapper.ToDTO(paciente);
+
+        return CreatedAtAction(nameof(GetPacienteById), new { id = paciente.Id }, pacienteDTO);
+    }
+
+    // PATCH: api/pacientes/{id}
+    [HttpPatch("{id}")]
+    public async Task<IActionResult> UpdatePaciente(int id, [FromBody] PacienteUpdateDTO dto)
+    {
+        var paciente = await _context.Pacientes.FindAsync(id);
+
+        if (paciente == null)
+            return NotFound();
+
+        if (dto.DataNasc != null && dto.DataNasc > DateOnly.FromDateTime(DateTime.Today))
+            return BadRequest(new { mensagem = "Data de nascimento não pode ser futura." });
+
+        if (dto.Telefone != null && !Validators.IsValidTelefone(dto.Telefone))
+            return BadRequest(new { mensagem = "Telefone em formato inválido. Use o formato (47) 98888-7777." });
+
+        PacienteMapper.ApplyUpdate(paciente, dto);
+
+        await _context.SaveChangesAsync();
+
+        return Ok(PacienteMapper.ToDTO(paciente));
+    }
+
+    // DELETE: api/pacientes/{id}
+    [HttpDelete("{id}")]
+    public async Task<IActionResult> DeletePaciente(int id)
+    {
+        var paciente = await _context.Pacientes.FindAsync(id);
+
+        if (paciente == null)
+            return NotFound();
+
+        var temConsultaFutura = await _context.Consultas
+            .AnyAsync(c => c.PacienteId == id && c.DataHora > DateTime.Now);
+
+        if (temConsultaFutura)
+            return BadRequest(new { mensagem = "Não é possível remover um paciente com consultas futuras agendadas." });
+
+        _context.Pacientes.Remove(paciente);
+        await _context.SaveChangesAsync();
+
+        return NoContent();
+    }
+}
